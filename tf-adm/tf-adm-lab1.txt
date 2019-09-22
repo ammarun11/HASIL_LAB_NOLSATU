@@ -1,0 +1,276 @@
+############################################
+##### Lab 1 - TERRAFORM ADMINISTRATION #####
+############################################
+
+
+##### Instruksi Environment Lab #####
+
+0. Saat ada X maka ubah ke nomor absen anda
+1. Saat ada [username] maka ubah ke username anda
+2. Buat 2 instance dengan ketentuan sebagai berikut:
+   - podX-terraform (OS: Ubuntu 16.04, Spesifikasi: vCPU 2 & vRAM 2GB, IP Address: 10.X.X.10)
+   - podX-docker (OS: Ubuntu 16.04, Spesifikasi: vCPU 2 & vRAM 2GB, IP Address: 10.X.X.20)
+3. Screenshot yang dilaporkan wajib dalam bentuk full screen capture/page
+
+#A>> Screenshot bagian Network Topology > Topology > Normal. Beri nama X-tf-adm-A.png
+
+#####################
+# Install Terraform #
+#####################
+
+*** Executed on podX-terraform ***
+
+##1. Install
+
+sudo su
+apt-get update
+apt-get install unzip
+wget https://releases.hashicorp.com/terraform/0.11.11/terraform_0.11.11_linux_amd64.zip
+unzip terraform_0.11.11_linux_amd64.zip
+ls
+mv terraform /usr/local/bin/
+
+##2. Verify
+
+terraform
+terraform version
+
+#B>> Screenshot Version dari terraform yang digunakan. Beri nama X-tf-adm-B.png
+
+#############################
+# Create OpenStack Instance #
+#############################
+
+*** Executed on podX-terraform ***
+
+##0. Create folder
+
+mkdir -p /latihan/0
+cd /latihan/0
+
+##1. Create file: provider.tf
+
+vi provider.tf
+
+...
+provider "openstack" {
+  user_name   = "CHANGE ME WITH YOUR USERNAME"
+  tenant_name = "CHANGE ME WITH YOUR USERNAME"
+  password    = "CHANGE ME WITH YOUR PASSWORD"
+  auth_url    = "http://lab0.nolsatu.id:5000"
+}
+...
+
+##2. Create file: instance.tf
+
+vi instance.tf
+
+...
+resource "openstack_compute_instance_v2" "instance" {
+  name             = "CHANGE ME WITH YOUR USERNAME"
+  image_name       = "ubuntu-16.04-server-cloudimg-amd64-disk1-20180306.img"
+  flavor_name      = "ns.2-2-20"
+  key_pair         = "key-instruktur"
+  security_groups  = ["default"]
+  network {
+    uuid = "CHANGE ME WITH YOUR INTERNAL NETWORK ID"
+  }
+}
+
+resource "openstack_networking_floatingip_v2" "floating_ip" {
+  pool = "extnet"
+}
+
+resource "openstack_compute_floatingip_associate_v2" "floating_ip" {
+  floating_ip = "${openstack_networking_floatingip_v2.floating_ip.address}"
+  instance_id = "${openstack_compute_instance_v2.instance.id}"
+}
+...
+
+##3. Apply
+
+terraform init
+terraform validate
+terraform providers
+terraform plan
+terraform apply
+terraform show
+
+#C>> Screenshot dari hasil terraform show. Beri nama X-tf-adm-C.png
+
+##4. Destroy
+
+terraform destroy
+
+
+###############################################
+# Create OpenStack Instance - Using Variable  #
+###############################################
+
+*** Executed on podX-terraform ***
+
+##0. Create folder
+
+mkdir -p /latihan/1
+cd /latihan/1
+cp /latihan/0/provider.tf .
+
+##1. Create file: varible.tf
+
+vi variable.tf
+
+...
+variable "name" {
+  default = "CHANGE ME WITH YOUR USERNAME"
+}
+
+variable "image" {
+  default = "ubuntu-16.04-server-cloudimg-amd64-disk1-20180306.img"
+}
+
+variable "flavor" {
+  default = "ns.2-2-20"
+}
+
+variable "keypair" {
+  default = "CHANGE ME WITH YOUR KEYPAIR NAME"
+}
+
+variable "network" {
+  default = "CHANGE ME WITH YOUR INTERNAL NETWORK ID"
+}
+...
+
+##2. Create file: instance.tf
+
+vi instance.tf
+
+...
+resource "openstack_compute_instance_v2" "instance" {
+  name            = "${var.name}"
+  image_name      = "${var.image}"
+  flavor_name     = "${var.flavor}"
+  key_pair        = "${var.keypair}"
+  security_groups = ["default"]
+  network {
+    uuid = "${var.network}"
+  }
+}
+
+resource "openstack_networking_floatingip_v2" "floating_ip" {
+  pool = "extnet"
+}
+
+resource "openstack_compute_floatingip_associate_v2" "floating_ip" {
+  floating_ip = "${openstack_networking_floatingip_v2.floating_ip.address}"
+  instance_id = "${openstack_compute_instance_v2.instance.id}"
+}
+...
+
+##3. Apply
+
+terraform init
+terraform validate
+terraform providers
+terraform plan
+terraform apply
+terraform show
+
+#D>> Screenshot hasil akses instance yang telah dibuat. Beri nama X-tf-adm-D.png
+
+##4. Destroy
+
+terraform destroy
+
+
+#############################################
+# Create OpenStack Instance - Bootstrapweb  #
+#############################################
+
+*** Executed on podX-terraform ***
+
+##0. Create folder
+
+mkdir -p /latihan/2
+cd /latihan/2
+cp /latihan/1/provider.tf .
+cp /latihan/1/variable.tf .
+
+##1. Create file: id_rsa
+
+vi id_rsa
+
+...
+PASTE YOUR PRIVATE KEY FOR ACCESS INSTANCE ON OPENSTACK HERE.
+...
+
+##2. Create file: instance.tf
+
+vi instance.tf
+
+...
+resource "openstack_compute_instance_v2" "instance" {
+  name            = "${var.name}"
+  image_name      = "${var.image}"
+  flavor_name     = "${var.flavor}"
+  key_pair        = "${var.keypair}"
+  security_groups = ["default"]
+  network {
+    uuid = "${var.network}"
+  }
+
+  provisioner "remote-exec" {
+    connection {
+      type     = "ssh"
+      user     = "ubuntu"
+      private_key = "${file("/latihan/2/id_rsa")}"
+    }
+
+    inline = [
+      "sudo apt-get -y update",
+      "sudo apt-get -y install nginx",
+      "sudo service nginx start",
+      "echo '[username]' | sudo tee /var/www/html/index.html"
+    ]
+  }
+
+}
+
+resource "openstack_networking_floatingip_v2" "floating_ip" {
+  pool = "extnet"
+}
+
+resource "openstack_compute_floatingip_associate_v2" "floating_ip" {
+  floating_ip = "${openstack_networking_floatingip_v2.floating_ip.address}"
+  instance_id = "${openstack_compute_instance_v2.instance.id}"
+}
+...
+
+##3. Apply
+
+terraform init
+terraform validate
+terraform providers
+terraform plan
+terraform apply
+terraform show
+
+#E>> Screenshot hasil akses instance yang telah dibuat dan pastikan service nginx aktive. Beri nama X-tf-adm-E.png
+
+##4. Access web
+
+terraform show | grep floating_ip
+curl http://floating-ip
+
+#F>> Screenshot hasil curl http://floating-ip . Beri nama X-tf-adm-F.png
+
+##5. Destroy
+
+terraform destroy
+
+##### Quiz Lab 1 #####
+1. Buat instance baru dengan nama [username-X] dan OS Centos.
+2. Setup nginx pada instance [username-X] dan jalankan aplikasi yang bersumber dari https://github.com/gabrielecirulli/2048.
+
+#G>> Screenshot verifikasi dari terraform show . Beri nama X-tf-adm-G.png
+#H>> Screenshot tampilan Games 2048 jika sudah berhasil dijalankan via browser. Beri nama X-tf-adm-H.png

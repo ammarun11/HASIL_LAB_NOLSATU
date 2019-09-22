@@ -1,0 +1,301 @@
+############################################
+##### Lab 2 - TERRAFORM ADMINISTRATION #####
+############################################
+
+
+##### Instruksi Environment Lab #####
+
+0. Saat ada X maka ubah ke nomor absen anda
+1. Saat ada [username] maka ubah ke username anda
+
+
+
+##################
+# Install Docker #
+##################
+
+*** Executed on podX-docker ***
+
+##1. Install
+
+sudo su
+apt update
+apt-get install apt-transport-https ca-certificates gnupg-agent software-properties-common
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | apt-key add -
+apt-key fingerprint 0EBFCD88
+
+add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+apt update
+apt-get install docker-ce docker-ce-cli containerd.io
+
+docker info
+docker run hello-world
+
+##2. Export Docker API
+
+vi /lib/systemd/system/docker.service
+
+# Find this:
+...
+ExecStart=/usr/bin/dockerd -H fd://
+...
+
+# then replace it with:
+...
+ExecStart=/usr/bin/dockerd -H tcp://0.0.0.0:2376 -H fd://
+...
+
+##3. Restart Docker
+
+systemctl daemon-reload
+systemctl restart docker
+systemctl status docker
+
+#I>> Screenshot status docker. Beri nama X-tf-adm-I.png
+
+###################
+# Run a container #
+###################
+
+*** Executed on podX-terraform ***
+
+##1. Create folder
+
+mkdir -p /latihan/3
+cd /latihan/3
+
+##2. Create file: provider.tf
+
+vi provider.tf
+
+...
+provider "docker" {
+  host = "tcp://IP_podX-docker:2376/"
+}
+...
+
+##3. Create file: container.tf
+
+vi container.tf
+
+...
+resource "docker_image" "nginx" {
+  name = "nginx"
+}
+
+resource "docker_container" "nginx" {
+  name = "nginx-1"
+  image = "${docker_image.nginx.latest}"
+}
+...
+
+##4. Apply
+
+terraform init
+terraform validate
+terraform providers
+terraform plan
+terraform apply
+terraform show
+
+# check on podX-docker
+
+docker images
+docker ps
+
+#J>> Screenshot verifikasi container docker sudah berjalan. Beri nama X-tf-adm-J.png
+
+##5. Destroy
+
+terraform destroy
+
+
+
+#################################
+# Run a container - Expose Port #
+#################################
+
+*** Executed on podX-terraform ***
+
+##1. Create folder
+
+mkdir -p /latihan/4
+cd /latihan/4
+cp /latihan/3/provider.tf .
+
+##2. Create file: container.tf
+
+vi container.tf
+
+...
+resource "docker_image" "nginx" {
+  name = "nginx"
+}
+
+resource "docker_container" "nginx" {
+  name = "nginx-2"
+  image = "${docker_image.nginx.latest}"
+
+  ports {
+    internal = 80
+    external = 8080
+  }
+}
+...
+
+##3. Apply
+
+terraform init
+terraform validate
+terraform providers
+terraform plan
+terraform apply
+terraform show
+
+##4. Access container service
+
+curl http://IP_podX-docker:8080 -i
+
+
+#K>> Screenshot hasil akses container service. Beri nama X-tf-adm-K.png
+
+##5. Destroy
+
+terraform destroy
+
+
+
+#################################
+# Run a container - File Upload #
+#################################
+
+*** Executed on podX-terraform ***
+
+##1. Create folder
+
+mkdir -p /latihan/5
+cd /latihan/5
+cp /latihan/3/provider.tf .
+
+##2. Create file: index.html
+
+vi index.html
+
+...
+Hello, I am [username]
+...
+
+##3. Create file: container.tf
+
+vi container.tf
+
+...
+resource "docker_image" "httpd" {
+  name = "httpd"
+}
+
+resource "docker_container" "httpd" {
+  name = "httpd-1"
+  image = "${docker_image.httpd.latest}"
+
+  ports {
+    internal = 80
+    external = 8181
+  }
+
+  upload {
+    content = "${file("index.html")}"
+    file = "/usr/local/apache2/htdocs/index.html"
+  }
+}
+...
+
+##4. Apply
+
+terraform init
+terraform validate
+terraform providers
+terraform plan
+terraform apply
+terraform show
+
+##5. Access container service
+
+curl http://IP_podX-docker:8181 -i
+
+#L>> Screenshot hasil curl ke port 8181 . Beri nama X-tf-adm-L.png
+
+##6. Destroy
+
+terraform destroy
+
+
+############################
+# Run a container - Volume #
+############################
+
+*** Executed on podX-docker ***
+
+##1. Create folder and index.html
+mkdir -p /data/web
+echo "Only test - [username]" | tee /data/web/index.html
+
+
+*** Executed on podX-terraform ***
+
+##2. Create folder
+
+mkdir -p /latihan/6
+cd /latihan/6
+cp /latihan/3/provider.tf .
+
+##3. Create file: container.tf
+
+vi container.tf
+
+...
+resource "docker_image" "httpd" {
+  name = "httpd"
+}
+
+resource "docker_container" "httpd" {
+  name = "httpd-2"
+  image = "${docker_image.httpd.latest}"
+
+  ports {
+    internal = 80
+    external = 8282
+  }
+
+  volumes {
+    host_path = "/data/web"
+    container_path = "/usr/local/apache2/htdocs/"
+  }
+}
+...
+
+##4. Apply
+
+terraform init
+terraform validate
+terraform providers
+terraform plan
+terraform apply
+terraform show
+
+##5. Access container service
+
+curl http://IP_podX-docker:8282 -i
+
+#M>> Screenshot hasil curl ke port 8282 . Beri nama X-tf-adm-M.png
+
+##6. Destroy
+
+terraform destroy
+
+##### Quiz Lab 2 #####
+1. Setup wordpress diatas container docker.
+
+#N>> Screenshot verifikasi terraform berjalan dengan baik tanpa ada error. Beri nama X-tf-adm-N.png
+#O>> Screenshot verifikasi bahwa wordpress sudah berjalan diatas container docker. Beri nama X-tf-adm-O.png
+#P>> Screenshot akses wordpress via browser. Beri nama X-tf-adm-P.png

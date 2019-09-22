@@ -1,0 +1,356 @@
+###############################################################
+##### Detecting Unavailable Services Using health checks  #####
+###############################################################
+
+#1 Create Folder
+cd ~
+mkdir health_checks; cd health_checks;
+
+#2 Start Client
+sudo docker run -d --name WEB1 katacoda/docker-http-server:healthy
+sudo docker run -d --name WEB2 katacoda/docker-http-server:healthy
+sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' WEB1
+sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' WEB2
+
+#3 Create Envoy configuration
+vim envoy.yaml
+
+...
+static_resources:
+  listeners:
+  - name: listener_0
+    address:
+      socket_address: { address: 0.0.0.0, port_value: 8080 }
+    filter_chains:
+    - filters:
+      - name: envoy.http_connection_manager
+        config:
+          codec_type: auto
+          stat_prefix: ingress_http
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: backend
+              domains:
+                - "*"
+              routes:
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: targetCluster
+          http_filters:
+          - name: envoy.router
+  clusters:
+  - name: targetCluster
+    connect_timeout: 0.25s
+    type: STRICT_DNS
+    dns_lookup_family: V4_ONLY
+    lb_policy: ROUND_ROBIN
+    hosts: [
+      { socket_address: { address: WEB1_CONTAINER_IP, port_value: 80 }},
+      { socket_address: { address: WEB2_CONTAIENR_IP, port_value: 80 }}
+    ]
+    health_checks:
+      - timeout: 1s
+        interval: 10s
+        interval_jitter: 1s
+        unhealthy_threshold: 6
+        healthy_threshold: 1
+        http_health_check:
+          path: "/health"
+...
+
+#4 Run Envoy
+sudo docker run -d --name proxy -p 80:8080 -v $(pwd):/etc/envoy/ envoyproxy/envoy:latest
+
+#5 Testing Curl (Keep Doing this in other terminal session)
+while true; do curl localhost; sleep .5; done
+
+#G> Screenshot hasil Curl, Beri nama X-ev-adm-G.png
+
+#6 Make Client unhealthy
+*Absen genap, make WEB1 unhealthy
+*Absen ganjil, make WEB2 unhealthy
+
+curl WEB_CONTAINER_IP/unhealthy
+
+#H> Screenshot hasil Curl, perhatikan perubahan pada hasil Curl, Beri nama X-ev-adm-H.png
+
+#7 Bring Client healthy again
+curl WEB_CONTAINER_IP/healthy
+
+#I> Screenshot hasil Curl, perhatikan perubahan pada hasil Curl, Beri nama X-ev-adm-I.png
+
+#8 Delete Docker
+sudo docker kill proxy WEB1 WEB2
+sudo docker rm proxy WEB1 WEB2
+
+################################################
+#####  Implementing Blue / Green rollouts  #####
+################################################
+
+#1 Create Folder
+cd ~
+mkdir blue_green_deploy; cd blue_green_deploy;
+
+#2 Start Client
+sudo docker run -d --name server1 katacoda/docker-http-server:v1
+
+sudo docker run -d --name server2-old katacoda/docker-http-server:v1
+sudo docker run -d --name server2-new katacoda/docker-http-server:v2
+
+sudo docker run -d --name server3-old katacoda/docker-http-server:v2
+sudo docker run -d --name server3-new katacoda/docker-http-server:v3
+
+sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' server1
+
+sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' server2-old
+sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' server2-new
+
+sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' server3-old
+sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' server3-new
+
+#3 Create Envoy Configuration
+vim envoy.yaml
+
+...
+static_resources:
+  listeners:
+  - name: listener_http
+    address:
+      socket_address: { address: 0.0.0.0, port_value: 8080 }
+    filter_chains:
+    - filters:
+      - name: envoy.http_connection_manager
+        config:
+          codec_type: auto
+          stat_prefix: ingress_http
+          route_config:
+            virtual_hosts:
+            - name: backend
+              domains:
+              - "*"
+              routes:
+              - match:
+                  prefix: "/service/1"
+                route:
+                  cluster: service1
+              - match:
+                  prefix: "/service/2"
+                  headers:
+                  - name: "x-canary-version"
+                    exact_match: "service2a"
+                route:
+                  cluster: service2a
+              - match:
+                  prefix: "/service/2"
+                route:
+                  cluster: service2
+              - match:
+                  prefix: "/service/3"
+                route:
+                  weighted_clusters:
+                    clusters:
+                    - name: service3a
+                      weight: 80
+                    - name: service3b
+                      weight: 20
+
+          http_filters:
+          - name: envoy.router
+            config: {}
+  clusters:
+  - name: service1
+    connect_timeout: 0.25s
+    type: strict_dns
+    lb_policy: round_robin
+    hosts:
+    - socket_address:
+        address: server1_CONTAINER_IP
+        port_value: 80
+  - name: service2
+    connect_timeout: 0.25s
+    type: strict_dns
+    lb_policy: round_robin
+    hosts:
+    - socket_address:
+        address: server2-old_CONTAINER_IP
+        port_value: 80
+  - name: service2a
+    connect_timeout: 0.25s
+    type: strict_dns
+    lb_policy: round_robin
+    hosts:
+    - socket_address:
+        address: server2-new_CONTAINER_IP
+        port_value: 80
+  - name: service3a
+    connect_timeout: 0.25s
+    type: strict_dns
+    lb_policy: round_robin
+    hosts:
+    - socket_address:
+        address: server3-old_CONTAINER_IP
+        port_value: 80
+  - name: service3b
+    connect_timeout: 0.25s
+    type: strict_dns
+    lb_policy: round_robin
+    hosts:
+    - socket_address:
+        address: server3-new_CONTAINER_IP
+        port_value: 80
+
+admin:
+  access_log_path: /tmp/admin_access.log
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 8001
+...
+
+#4 Run Envoy
+sudo docker run -d --name proxy -p 80:8080 -p 8001:8001 -v $(pwd):/etc/envoy/ envoyproxy/envoy:latest
+
+#5 Testing Curl
+x=1; while [ $x -le 5 ]; do curl localhost/service/1; sleep .5; x=$(( $x + 1 )); done
+x=1; while [ $x -le 5 ]; do curl localhost/service/2; sleep .5; x=$(( $x + 1 )); done
+x=1; while [ $x -le 5 ]; do curl -H "x-canary-version: service2a" localhost/service/2; sleep .5; x=$(( $x + 1 )); done
+
+#J> Screenshot hasil Curl, Beri nama X-ev-adm-J.png
+
+#6 Testing Curl into service3
+x=1; while [ $x -le 30 ]; do curl localhost/service/3; sleep .5; x=$(( $x + 1 )); done
+
+#K> Screenshot hasil Curl, perhatikan ada 2 host yang melayani, Beri nama X-ev-adm-K.png
+
+#7 Change Weight from 80/20 into 0/100 & restart Envoy
+sudo docker kill proxy
+sudo docker rm proxy
+sudo docker run -d --name proxy -p 80:8080 -p 8001:8001 -v $(pwd):/etc/envoy/ envoyproxy/envoy:latest
+
+#6 Testing Curl into service3 again
+x=1; while [ $x -le 30 ]; do curl localhost/service/3; sleep .5; x=$(( $x + 1 )); done
+
+#L> Screenshot hasil Curl, perhatikan bahwa sekarang hanya V3 yang melayani, Beri nama X-ev-adm-L.png
+
+#8 Delete Docker
+sudo docker kill server1 server2-old server2-new server3-old server3-new proxy
+sudo docker rm server1 server2-old server2-new server3-old server3-new proxy
+
+############################################################
+#####   Implementing Metrics and Tracing Capabilities  #####
+############################################################
+
+#1 Create Folder
+cd ~
+mkdir metrics_tracing; cd metrics_tracing;
+
+#2 Start Client
+sudo docker run -d --name WEB1 katacoda/docker-http-server:healthy
+sudo docker run -d --name WEB2 katacoda/docker-http-server:healthy
+sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' WEB1
+sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' WEB2
+
+#3 Create Envoy configuration
+vim envoy.yaml
+
+...
+static_resources:
+  listeners:
+  - name: listener_0
+    address:
+      socket_address: { address: 0.0.0.0, port_value: 8080 }
+    filter_chains:
+    - filters:
+      - name: envoy.http_connection_manager
+        config:
+          codec_type: auto
+          stat_prefix: ingress_http
+          route_config:
+            name: local_route
+            virtual_hosts:
+            - name: backend
+              domains:
+                - "*"
+              routes:
+              - match:
+                  prefix: "/"
+                route:
+                  cluster: targetCluster
+          http_filters:
+          - name: envoy.router
+  clusters:
+  - name: targetCluster
+    connect_timeout: 0.25s
+    type: STRICT_DNS
+    dns_lookup_family: V4_ONLY
+    lb_policy: ROUND_ROBIN
+    hosts: [
+      { socket_address: { address: WEB1_CONTAINER_IP, port_value: 80 }},
+      { socket_address: { address: WEB2_CONTAINER_IP, port_value: 80 }}
+    ]
+    health_checks:
+      - timeout: 1s
+        interval: 10s
+        interval_jitter: 1s
+        unhealthy_threshold: 6
+        healthy_threshold: 1
+        http_health_check:
+          path: "/health"
+admin:
+  access_log_path: /tmp/admin_access.log
+  address:
+    socket_address:
+      address: 0.0.0.0
+      port_value: 9090
+...
+
+#4 Run Envoy
+sudo docker run -d --name proxy -p 80:8080 -p 9090:9090 -v $(pwd):/etc/envoy/ envoyproxy/envoy:latest
+sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' proxy
+
+#6 Testing Curl 
+x=1; while [ $x -le 10 ]; do curl localhost; sleep .5; x=$(( $x + 1 )); done
+
+#7 Open Admin Pages
+http://FLOATING_IP:9090
+#M> Screenshot hasil browser, Beri nama X-ev-adm-M.png
+
+#8 Go to menu stat/prometheus
+#N> Screenshot hasil browser, Beri nama X-ev-adm-N.png
+
+#9 Create Prometheus configuration
+vim prometheus.yml
+
+...
+global:
+  scrape_interval:     15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: 'envoy'
+    metrics_path: /stats/prometheus
+    static_configs:
+      - targets: ['PROXY_IP:9090']
+        labels:
+          group: 'envoy'
+...
+
+#10 Jalankan Prometheus
+sudo docker run -d --name prometheus -p 9100:9090 -v $(pwd)/prometheus.yml:/etc/prometheus/prometheus.yml prom/prometheus
+sudo docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' prometheus
+
+#11 Open Prometheus Pages
+#O> Screenshot Targets, dan pastikan UP Beri nama X-ev-adm-O.png
+
+################
+##### Quiz #####
+################
+
+1. Jalankan Grafana pada Docker dengan port 3000
+2. Hubungkan grafana dengan prometheus
+3. Gunakan dashboard berikut
+https://grafana.com/dashboards/6693
+
+#P> Screenshot hasil dashboard pada grafana, Beri nama X-ev-adm-P.png
